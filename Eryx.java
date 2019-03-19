@@ -1,12 +1,13 @@
-package Eryx;
+package ClassRobots;
 
 import java.awt.Color;
 import java.awt.geom.Point2D;
 import java.util.ArrayList;
+import java.util.HashMap;
 
 import robocode.AdvancedRobot;
 import robocode.Condition;
-import robocode.HitWallEvent;
+import robocode.HitRobotEvent;
 import robocode.Rules;
 import robocode.ScannedRobotEvent;
 import robocode.util.Utils;
@@ -17,7 +18,10 @@ public class Eryx extends AdvancedRobot{
     static final int BINS = 25;
     
     ArrayList<Wave> waves = new ArrayList<Wave>();
-    static int[][][][] statBuffers = new int[VELOCITY_INDEXES][VELOCITY_INDEXES][RADIAL_INDEXES][BINS];
+    static HashMap<String, int[][][][]> enemyToBuffers = new HashMap<String, int[][][][]>();
+    
+    boolean ramming = false;
+    String target;
     
     double enemyX, enemyY;
     double lastEnemyVelocity = 0;
@@ -29,11 +33,8 @@ public class Eryx extends AdvancedRobot{
     
     @Override
     public void run(){
-        Color body = new Color(0,0,0);
-        Color gun = new Color(0,0,0);
-        Color radar = new Color(0,0,0);
-        
-        this.setColors(new Color(163,163,163), new Color(244, 170, 66), new Color(163, 163, 163));
+        this.setColors(new Color(79, 17, 57), new Color(0,0,0), new Color(0,0,0));
+        this.setScanColor(new Color(15,11,25));
         setAdjustRadarForGunTurn(true);
         setAdjustGunForRobotTurn(true);
         lastScanTime = getTime();
@@ -43,9 +44,14 @@ public class Eryx extends AdvancedRobot{
             waitFor(new ScanDroughtCondition());
         }
     }
-    
+
     @Override
     public void onScannedRobot(ScannedRobotEvent e) {
+    	target = e.getName();
+    	if(!enemyToBuffers.containsKey(target)) {
+    		enemyToBuffers.put(e.getName(), new int[VELOCITY_INDEXES][VELOCITY_INDEXES][RADIAL_INDEXES][BINS]);
+    	}
+    	
         enemyX = getX() + Math.sin(getHeadingRadians() + e.getBearingRadians())*e.getDistance();
         enemyY = getY() + Math.cos(getHeadingRadians() + e.getBearingRadians())*e.getDistance();
         
@@ -59,7 +65,7 @@ public class Eryx extends AdvancedRobot{
         
         enemyDirection = Utilities.sign(e.getVelocity() * Math.sin(e.getHeadingRadians() - (getHeadingRadians() + e.getBearingRadians())));
         
-        int[] aimingBins = Utilities.getStats(e.getVelocity(), lastEnemyVelocity, e.getDistance());
+        int[] aimingBins = Utilities.getStats(e.getName(), e.getVelocity(), lastEnemyVelocity, e.getDistance());
         int bestAimingRegister = (BINS-1)/2;
         for(int i = 0; i < BINS; i++)
             if(aimingBins[bestAimingRegister] < aimingBins[i]) bestAimingRegister = i;
@@ -75,52 +81,59 @@ public class Eryx extends AdvancedRobot{
         waves.add(aimingWave);
         if(getGunHeat()==0 && gunAdjust < Math.atan2(9,  e.getDistance()))
             setFireBullet(power);
-        
-        //DONT TURN IF COMMITED TO RAM
-        //IMPLEMENT AN ON HIT ROBOT THAT CHANGES A BOOLEAN THEN CHECK FOR ON DEATH TO WIN
-        if(Math.random()*(getTime()-lastTurnTime) >= 25) {
+
+        if(Math.random()*(getTime()-lastTurnTime) >= 25 && !ramming) {
             direction *= -1;
             lastTurnTime = getTime();
         }
         
         setMaxVelocity(10.0/(180.0/e.getDistance()/Math.PI+.75));
-        double approachAngle = Math.asin(e.getVelocity()*Math.sin(getHeadingRadians() + e.getBearingRadians() - Math.PI)/Rules.MAX_VELOCITY) + Math.max(Math.min((getEnergy()-e.getEnergy())/20.0,1),-1)*Math.PI/2;
+        double approachAngle = Math.asin(e.getVelocity()*Math.sin(getHeadingRadians() + e.getBearingRadians() - Math.PI)/Rules.MAX_VELOCITY) + Math.max(Math.min((getEnergy()-e.getEnergy())/5.0,1),-1)*Math.PI/2;
+        if(e.getDistance() > Rules.RADAR_SCAN_RADIUS/2 &&  approachAngle < 0) approachAngle = 0;
         double desiredHeading = (getHeadingRadians()) + e.getBearingRadians() + Math.PI/2 + (Math.PI - approachAngle)*direction;
         
-        setTurnLeftRadians(Utils.normalRelativeAngle(desiredHeading - getHeadingRadians()));
+        ramming = approachAngle >= Math.PI/4 ? true : false;
+
+        if(getX() < 50 || getX() > getBattleFieldWidth() - 50 || getY() < 50 || getY() > getBattleFieldHeight() - 50) {
+	        if(getX() < 50) {
+	            desiredHeading = Math.PI/2;
+	        }
+	        else if(getX() > getBattleFieldWidth() - 50) {
+	            desiredHeading = Math.PI*3/2;
+	        }
+	        else if(getY() < 50) {
+	            desiredHeading = 0;
+	        }
+	        else if(getY() > getBattleFieldHeight() - 50) {
+	            desiredHeading = Math.PI;
+	        }
+	        
+	        if(Math.abs(Utils.normalRelativeAngle(desiredHeading - getHeadingRadians())) > Math.PI/2) {
+	        	desiredHeading = (desiredHeading + Math.PI)%(Math.PI*2);
+	        	direction = -1;
+	        }
+	        else {
+	        	direction = 1;
+	        }
+	        setTurnRightRadians(Utils.normalRelativeAngle(desiredHeading - getHeadingRadians()));
+        }
+        else {
+        	setTurnLeftRadians(Utils.normalRelativeAngle(desiredHeading - getHeadingRadians()));
+        }
         setAhead(Double.POSITIVE_INFINITY*direction);
-        
-        //FIX THIS TO MAKE IT MORE ELEGANT
-        if(getX() < 50) {
-            setTurnRightRadians(Math.PI/2 - getHeadingRadians());
-            setAhead(Double.POSITIVE_INFINITY);
-            direction = 1;
-            lastTurnTime = getTime();
-        }
-        if(getX() > getBattleFieldWidth() - 50) {
-            setTurnRightRadians(Math.PI*3/2 - getHeadingRadians());
-            setAhead(Double.POSITIVE_INFINITY);
-            direction = 1;
-            lastTurnTime = getTime();
-        }
-        if(getY() < 50) {
-            setTurnRightRadians(Math.PI - getHeadingRadians());
-            setAhead(Double.NEGATIVE_INFINITY);
-            direction = -1;
-            lastTurnTime = getTime();
-        }
-        if(getY() > getBattleFieldHeight() - 50) {
-            setTurnRightRadians(0 - getHeadingRadians());
-            setAhead(Double.NEGATIVE_INFINITY);
-            direction = -1;
-            lastTurnTime = getTime();
-        }
-        
         
         lastScanTime = getTime();
         lastEnemyVelocity = e.getVelocity();
         setTurnRadarLeftRadians(1.2*Utils.normalRelativeAngle((Math.atan2(enemyY-getY(), enemyX-getX()) - Utilities.normalize(getRadarHeadingRadians()))));
         scan();
+    }
+    
+    @Override
+    public void onHitRobot(HitRobotEvent e) {
+    	if(!e.getName().equals(target)) {
+    		direction *= -1;
+            lastTurnTime = getTime();
+    	}
     }
     
     public class Wave{
@@ -148,17 +161,18 @@ public class Eryx extends AdvancedRobot{
             }
             return false;
         }
-        
     }
     
     public class ScanDroughtCondition extends Condition {
         final int DELAY = 5;
         @Override
         public boolean test() {
-            if(getTime()-DELAY >= lastScanTime) return true;
+            if(getTime()-DELAY >= lastScanTime) {
+            	ramming = false;
+            	return true;
+            }
             return false;
         }
-        
     }
     
     public static class Utilities{
@@ -177,12 +191,12 @@ public class Eryx extends AdvancedRobot{
         static double maxEscapeAngle(double power) {
             return Math.asin(8 / getSpeed(power));
         }
-        
-        static int[] getStats(double velocity, double lastVelocity, double distance) {
+      
+        static int[] getStats(String name, double velocity, double lastVelocity, double distance) {
             int velocityIndex = (int)Math.abs(velocity / (Rules.MAX_VELOCITY/(VELOCITY_INDEXES-1)));
             int lastVelocityIndex = (int)Math.abs(lastVelocity / (Rules.MAX_VELOCITY/(VELOCITY_INDEXES-1)));
             int radialIndex = (int)(distance/(Rules.RADAR_SCAN_RADIUS/(double)RADIAL_INDEXES));
-            return statBuffers[velocityIndex][lastVelocityIndex][radialIndex];
+            return enemyToBuffers.get(name)[velocityIndex][lastVelocityIndex][radialIndex];
         }
     }
 }
